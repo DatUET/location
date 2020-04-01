@@ -41,8 +41,8 @@ public class DatabaseHandler extends SQLiteOpenHelper {
 
         ContentValues values = new ContentValues();
         values.put(KEY_TIME, location.getTime());
-        values.put(KEY_LATITUDE, location.getLatitude());
         values.put(KEY_LONGITUDE, location.getLongitude());
+        values.put(KEY_LATITUDE, location.getLatitude());
 
         db.insert(TABLE_NAME, null, values);
         db.close();
