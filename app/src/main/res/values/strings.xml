@@ -2,4 +2,11 @@
     <string name="app_name">save_location</string>
     <string name="title_activity_maps">Map</string>
     <string name="title_activity_maps2">Map</string>
+
+    <plurals name="num_locations_reported">
+        <item quantity="zero">No location reported</item>
+        <item quantity="one">One location reported</item>
+        <item quantity="other">%d locations reported</item>
+    </plurals>
+
 </resources>

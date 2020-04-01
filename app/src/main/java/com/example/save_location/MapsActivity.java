@@ -8,14 +8,21 @@ import androidx.fragment.app.FragmentActivity;
 import android.Manifest;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.sqlite.SQLiteDatabase;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.preference.PreferenceManager;
 import android.util.Log;
+import android.view.View;
+import android.widget.Button;
+import android.widget.Toast;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationCallback;
 import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
@@ -38,22 +45,22 @@ import com.karumi.dexter.listener.single.PermissionListener;
 import java.util.ArrayList;
 import java.util.List;
 
-public class MapsActivity extends FragmentActivity implements OnMapReadyCallback {
+public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, SharedPreferences.OnSharedPreferenceChangeListener {
 
     private static final String TAG = "MainActivity";
     int LOCATION_REQUEST_CODE = 10001;
+    boolean stopService = false;
 
     private GoogleMap mMap;
-    LocationRequest locationRequest;
+    Button cleanLocationButton, stopServiceButton;
     FusedLocationProviderClient fusedLocationProviderClient;
     static MapsActivity instance;
     DatabaseHandler databaseHandler;
     List<Polyline> polylineList;
     PolylineOptions polylineOptions;
-
-    public static MapsActivity getInstance() {
-        return instance;
-    }
+    Intent intent;
+    private LocationCallback mLocationCallback;
+    List<Location> locationList;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,43 +75,101 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         addControl();
     }
 
+    private void drawPolyline() {
+        if (!polylineList.isEmpty()) {
+            for (Polyline i : polylineList) {
+                i.remove();
+            }
+        }
+        locationList.clear();
+        locationList = databaseHandler.getAllLocations();
+        Log.d("size", locationList.size() + "");
+        if (locationList.size() > 1) {
+            for (int i = 1; i < locationList.size(); i++) {
+                LatLng latLng1 = new LatLng(locationList.get(i - 1).getLatitude(), locationList.get(i - 1).getLongitude());
+                LatLng latLng2 = new LatLng(locationList.get(i).getLatitude(), locationList.get(i).getLongitude());
+//            mMap.addMarker(new MarkerOptions().position(latLng1));
+//            mMap.addMarker(new MarkerOptions().position(latLng2));
+                polylineOptions = new PolylineOptions().width(20).color(Color.CYAN).add(latLng1, latLng2);
+                polylineList.add(mMap.addPolyline(polylineOptions));
+            }
+            //mMap.addPolyline(new PolylineOptions().width(20).color(Color.CYAN).add(latLng1, latLng2));
+        }
+    }
+
     private void addControl() {
         databaseHandler = new DatabaseHandler(this);
+        cleanLocationButton = findViewById(R.id.cleanLocationButton);
+        stopServiceButton = findViewById(R.id.stopServiceButton);
         polylineList = new ArrayList<>();
+        locationList = new ArrayList<>();
+        intent = new Intent(MapsActivity.this, LocationService.class);
         fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
-        Dexter.withActivity(this).withPermission(Manifest.permission.ACCESS_FINE_LOCATION).withListener(new PermissionListener() {
+        mLocationCallback = new LocationCallback() {
             @Override
-            public void onPermissionGranted(PermissionGrantedResponse response) {
-                //updateLocation();
+            public void onLocationResult(LocationResult locationResult) {
+
+                if (locationResult == null) {
+                    Log.d(TAG, "onLocationResult: location error");
+                    return;
+                }
+
+                List<android.location.Location> locations = locationResult.getLocations();
+
+                LocationResultHelper helper = new LocationResultHelper(MapsActivity.this, locations);
+
+                helper.showNotification();
+
+                helper.saveLocationResults();
+
+                addLocation2DB(new com.example.save_location.Location(System.currentTimeMillis() + "", locations.get(0).getLongitude(), locations.get(0).getLatitude()));
+                drawPolyline();
+
+//                Log.d(TAG, "onLocationResult: " + location.getLatitude() + " \n" +
+//                        location.getLongitude());
+
+
             }
+        };
+    }
 
+    private void addEvent() {
+        requestBatchLocationUpdates();
+        cleanLocationButton.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onPermissionDenied(PermissionDeniedResponse response) {
-
+            public void onClick(View v) {
+                databaseHandler.deleteAllLocation();
+                for (Polyline i : polylineList) {
+                    i.remove();
+                }
             }
+        });
 
+        stopServiceButton.setOnClickListener(new View.OnClickListener() {
             @Override
-            public void onPermissionRationaleShouldBeShown(PermissionRequest permission, PermissionToken token) {
-
+            public void onClick(View v) {
+                stopLocationService();
+                stopService = true;
             }
         });
     }
 
-    private void addEvent() {
-        List<Location> locationList;
-        locationList = databaseHandler.getAllLocations();
-        Log.d("size", locationList.size() + "");
-        for (int i = 1; i<locationList.size(); i++) {
-            LatLng latLng1 = new LatLng(locationList.get(i-1).getLatitude(), locationList.get(i-1).getLongitude());
-            LatLng latLng2 = new LatLng(locationList.get(i).getLatitude(), locationList.get(i).getLongitude());
-            mMap.addMarker(new MarkerOptions().position(latLng1));
-            mMap.addMarker(new MarkerOptions().position(latLng2));
-            mMap.moveCamera(CameraUpdateFactory.newLatLng(latLng1));
-            mMap.setMinZoomPreference(15);
-            polylineOptions = new PolylineOptions().width(20).color(Color.CYAN).add(latLng1, latLng2);
-            polylineList.add(mMap.addPolyline(polylineOptions));
-        }
-        //mMap.addPolyline(new PolylineOptions().width(20).color(Color.CYAN).add(latLng1, latLng2));
+    private void startLocationService() {
+        //start background location service
+
+        Intent intent = new Intent(this, LocationService.class);
+        ContextCompat.startForegroundService(this, intent);
+        Toast.makeText(this, "Service Started", Toast.LENGTH_SHORT).show();
+
+    }
+
+    private void stopLocationService() {
+        //stop background location service
+
+        Intent intent = new Intent(this, LocationService.class);
+        stopService(intent);
+        Toast.makeText(this, "Service Stopped", Toast.LENGTH_SHORT).show();
+
     }
 
     void addLocation2DB(final Location location) {
@@ -122,39 +187,38 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         // Add a marker in Sydney and move the camera
         addEvent();
+        LatLng latLng = new LatLng(21.0138424,105.7976838);
+        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(latLng, 20));
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        PreferenceManager.getDefaultSharedPreferences(this)
+                .registerOnSharedPreferenceChangeListener(this);
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-            getLastLocation();
+            requestBatchLocationUpdates();
         } else {
             askLocationPermission();
         }
     }
 
-    private void getLastLocation() {
-        Task<android.location.Location> locationTask = fusedLocationProviderClient.getLastLocation();
 
-        locationTask.addOnSuccessListener(new OnSuccessListener<android.location.Location>() {
-            @Override
-            public void onSuccess(android.location.Location location) {
-                if (location != null) {
-                    //We have a location
-                    addLocation2DB(new Location(System.currentTimeMillis() + "", location.getLongitude(), location.getLatitude()));
-                } else  {
-                    Log.d(TAG, "onSuccess: Location was null...");
-                }
-            }
-        });
+    private void requestBatchLocationUpdates() {
 
-        locationTask.addOnFailureListener(new OnFailureListener() {
-            @Override
-            public void onFailure(@NonNull Exception e) {
-                Log.e(TAG, "onFailure: " + e.getLocalizedMessage() );
-            }
-        });
+        LocationRequest locationRequest = LocationRequest.create();
+        locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+        locationRequest.setInterval(5000);
+        locationRequest.setFastestInterval(4000);
+
+        locationRequest.setMaxWaitTime(15 * 1000);
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+
+            return;
+        }
+        fusedLocationProviderClient.requestLocationUpdates(locationRequest, mLocationCallback, null);
     }
 
     private void askLocationPermission() {
@@ -173,7 +237,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         if (requestCode == LOCATION_REQUEST_CODE) {
             if (grantResults.length >0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 // Permission granted
-                getLastLocation();
+                requestBatchLocationUpdates();
             } else {
                 //Permission not granted
             }
@@ -183,8 +247,22 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     @Override
     protected void onPause() {
         super.onPause();
-        for (Polyline i : polylineList) {
-            i.remove();
+        if (!stopService) {
+            startLocationService();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        PreferenceManager.getDefaultSharedPreferences(this)
+                .unregisterOnSharedPreferenceChangeListener(this);
+    }
+
+    @Override
+    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+        if (key.equals(LocationResultHelper.KEY_LOCATION_RESULTS)) {
+            //mOutputText.setText(LocationResultHelper.getSavedLocationResults(this));
         }
     }
 }
